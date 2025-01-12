@@ -1,55 +1,33 @@
-import base64
-import io
 import logging
 
 import mkdocs.utils
-import qrcode
+import yaml
 from mkdocs.plugins import BasePlugin
-from qrcode.main import QRCode
+
+from mkdocs_qr_plugin.qr_image_generator import QRImageGenerator, Size, ImageType, CodeType, QRData
 
 log = logging.getLogger(f"mkdocs.plugins.{__name__}")
 log.addFilter(mkdocs.utils.warning_filter)
 
 
-class Size:
-    def __init__(self, width, height):
-        self.width = width
-        self.height = height
-
-
 class QRPlugin(BasePlugin):
 
     @staticmethod
-    def generate_qr_code_data(data: str, size: Size = None) -> str:
+    def get_image_tag(data: str, size: Size = None, reference: str = None, title: str = None) -> str:
         """
         Generates a QR code as an SVG string.
 
         Args: data: The data to be encoded in the QR code.
-        Returns:str: The SVG string representing the QR code.
+        Returns:str: The png string representing the QR code.
         """
-        if size is None:
-            size = Size(400, 400)
 
-        qr = QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=4,
-        )
-        qr.add_data(data)
-        qr.make(fit=True)
+        new_qr_generator = QRImageGenerator(code_type=CodeType.QR, output_type=ImageType.SVG, size=size)
 
-        img = qr.make_image(fill_color="black", back_color="white")
+        qr_data = QRData(data=data,
+                         reference=reference,
+                         title=title)
 
-        img = img.resize((size.width, size.width))
-
-        img_io = io.BytesIO()
-        img.save(img_io, 'PNG')
-        img_io.seek(0)
-        img_bytes = img_io.read()
-        base64_str = base64.b64encode(img_bytes).decode('utf-8')
-        img_tag = f'<img src="data:image/png;base64,{base64_str}" alt="Image">'
-        return base64_str
+        return new_qr_generator.get_html_tag(qr_data=qr_data)
 
     def on_page_markdown(self,
                          markdown,
@@ -62,10 +40,33 @@ class QRPlugin(BasePlugin):
         def generate_image(match):
             title = match.group(1).strip()
             content = match.group(2).strip()
-            content = QRPlugin.generate_qr_code_data(content)
 
-            return f'<img src="data:image/png;base64,{content}" alt="{title}">'
+            image_tag = QRPlugin.get_image_tag(data=content, reference=title)
+            return image_tag
+
+        def generate_image_yaml(match):
+
+            try:
+                data = yaml.safe_load(match.group(1).strip())
+
+                size = None
+                if data.get('width') and data.get('height'):
+                    size = Size(data['width'], data['height'])
+
+                if not data.get('data'):
+                    raise ValueError("Missing data")
+
+                image_tag = QRPlugin.get_image_tag(data=data['data'], title=data.get('title'), reference=data.get('reference'), size=size)
+                return image_tag
+            except yaml.YAMLError as exc:
+                return f"<b>Error parsing YAML: {exc}</b>"
+            except ValueError as exc:
+                return f"<b>Missing value: {exc}</b>"
 
         markdown = re.sub(r":::QR\n(.*?)\n(.*?)\n:::", generate_image, markdown)
+
+        markdown = re.sub(r"`{3,}barcode\n([^`]+)\n`{3,}", generate_image_yaml, markdown)
+
+        # page.
 
         return markdown
